@@ -125,21 +125,6 @@
   .rate-ctl b{font-family:"IBM Plex Mono",monospace;color:var(--ink);font-weight:500;min-width:2.2em;text-align:right}
   .tts-unsupported{font-size:.74rem;color:var(--accent)}
 
-  /* OpenAI 키 설정 바 */
-  .keybar{margin:1.1rem 0 0;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;
-    background:rgba(255,255,255,.55);border:1px dashed var(--line);border-radius:10px;padding:.7rem .85rem}
-  .keybar.ok{border-style:solid;border-color:#3f6f4a;background:rgba(63,111,74,.06)}
-  .keybar label{font-size:.78rem;color:var(--ink-soft);white-space:nowrap}
-  .keybar input[type=password],.keybar select{font-family:"Gowun Dodum",sans-serif;font-size:.85rem;color:var(--ink);
-    background:#fff;border:1px solid var(--line);border-radius:7px;padding:.4rem .6rem;outline:none}
-  .keybar input[type=password]{flex:1;min-width:200px}
-  .keybar select{cursor:pointer}
-  .keybar .status{font-family:"IBM Plex Mono",monospace;font-size:.72rem;margin-left:auto;white-space:nowrap}
-  .keybar .status.on{color:#3f6f4a}
-  .keybar .status.off{color:var(--ink-soft)}
-  .keybar .mini{font-size:.7rem;color:var(--ink-soft);flex-basis:100%;line-height:1.6;margin-top:.1rem}
-  .keybar .mini a{color:var(--accent)}
-
   /* 챕터 전체 듣기 버튼 */
   .chapter-play{flex:none;font-family:"Gowun Dodum",sans-serif;font-size:.76rem;cursor:pointer;
     background:#fff;border:1px solid var(--ch);color:var(--ch);border-radius:999px;padding:.3rem .8rem;
@@ -200,26 +185,6 @@
     <div class="meta-prof" id="prof"></div>
     <div class="note" id="note"></div>
   </header>
-
-  <div class="keybar" id="keybar">
-    <label>OpenAI API 키</label>
-    <input type="password" id="apiKey" placeholder="sk-... (이 파일에 저장되지 않고 새로고침하면 사라집니다)" autocomplete="off" spellcheck="false">
-    <label for="voiceSel">음성</label>
-    <select id="voiceSel">
-      <option value="alloy">Alloy</option>
-      <option value="ash">Ash</option>
-      <option value="ballad">Ballad</option>
-      <option value="coral" selected>Coral</option>
-      <option value="echo">Echo</option>
-      <option value="fable">Fable</option>
-      <option value="nova">Nova</option>
-      <option value="onyx">Onyx</option>
-      <option value="sage">Sage</option>
-      <option value="shimmer">Shimmer</option>
-    </select>
-    <span class="status off" id="keyStatus">미설정</span>
-    <div class="mini">고품질 OpenAI 음성을 쓰려면 키가 필요합니다. 키는 브라우저 메모리에만 잠시 보관되며 파일에는 저장되지 않습니다. 키를 비워 두면 브라우저 기본 음성으로 재생됩니다. · <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">키 발급</a></div>
-  </div>
 
   <div class="controls">
     <div class="search">
@@ -1031,7 +996,7 @@ const EXAM_DATA = {
   document.getElementById('title').textContent = D.meta.course + ' 기말 암기본';
   document.getElementById('subtitle').textContent = D.meta.subtitle;
   document.getElementById('prof').textContent = D.meta.prof;
-  document.getElementById('note').textContent = D.meta.note + ' 각 문항의 ▶ 버튼으로 한 문항씩, 챕터 제목의 「챕터 전체 듣기」로 챕터 전체를 음성으로 들을 수 있습니다.';
+  document.getElementById('note').textContent = D.meta.note + ' 각 문항의 ▶ 버튼으로 한 문항씩, 챕터 제목의 「챕터 전체 듣기」로 챕터 전체를 음성으로 들을 수 있습니다. (음성 파일이 함께 있어야 재생되며, 없으면 브라우저 기본 음성으로 읽습니다.)';
 
   // 챕터 네비
   const nav = document.getElementById('chapnav');
@@ -1053,6 +1018,7 @@ const EXAM_DATA = {
     sec.className='chapter'; sec.id=ch.id;
     sec.style.setProperty('--ch',chColors[ch.id]);
     const num=ch.id.slice(2);
+    let chSeq=0;
     sec.innerHTML =
       '<div class="chapter-head">'+
         '<span class="chapter-num">Ch'+num+'</span>'+
@@ -1070,7 +1036,10 @@ const EXAM_DATA = {
       gd.appendChild(gl);
       g.items.forEach(it=>{
         qid++;
+        chSeq++;
+        const aid=ch.id+'-'+String(chSeq).padStart(2,'0'); // 예: ch4-01
         const d=document.createElement('details'); d.className='qa';
+        d.dataset.aid=aid;
         d.innerHTML=
           '<summary>'+
             '<span class="q-mark">Q'+qid+'.</span>'+
@@ -1129,30 +1098,19 @@ const EXAM_DATA = {
     noresult.style.display = any? 'none':'block';
   });
 
-  // ---------- TTS (브라우저 내장 음성) ----------
-  // ===================== TTS 엔진 (OpenAI + 브라우저 폴백) =====================
+  // ===================== TTS 엔진 (사전 생성 mp3 재생 + 브라우저 폴백) =====================
   (function initTTS(){
     const rateInput=document.getElementById('rate');
     const rateVal=document.getElementById('rateVal');
-    const keyInput=document.getElementById('apiKey');
-    const voiceSel=document.getElementById('voiceSel');
-    const keyStatus=document.getElementById('keyStatus');
-    const keybar=document.getElementById('keybar');
     const synth=window.speechSynthesis;
+    const AUDIO_DIR='audio/';   // 같은 폴더의 audio/{aid}.mp3
+    const missing=new Set();    // mp3가 없어 폴백한 aid 기록(중복 시도 방지)
 
     let rate=parseFloat(rateInput.value);
-    rateInput.addEventListener('input',()=>{ rate=parseFloat(rateInput.value); rateVal.textContent=rate.toFixed(1)+'×'; });
-
-    // --- API 키 (메모리에만 보관, 파일/localStorage 저장 안 함) ---
-    let API_KEY='';
-    function refreshKeyUI(){
-      const has=API_KEY.trim().length>0;
-      keyStatus.textContent = has? 'OpenAI 음성 사용 중' : '미설정 · 브라우저 음성';
-      keyStatus.className='status '+(has?'on':'off');
-      keybar.classList.toggle('ok',has);
-    }
-    keyInput.addEventListener('input',()=>{ API_KEY=keyInput.value.trim(); refreshKeyUI(); });
-    refreshKeyUI();
+    rateInput.addEventListener('input',()=>{
+      rate=parseFloat(rateInput.value); rateVal.textContent=rate.toFixed(1)+'×';
+      if(audioEl) audioEl.playbackRate=rate;
+    });
 
     // --- 토스트 ---
     let toastEl=null,toastT=null;
@@ -1162,7 +1120,7 @@ const EXAM_DATA = {
       clearTimeout(toastT); toastT=setTimeout(()=>toastEl.classList.remove('show'),3200);
     }
 
-    // --- HTML → 음성용 순수 텍스트 ---
+    // --- HTML → 음성용 순수 텍스트 (브라우저 폴백 전용) ---
     function toSpeech(html){
       const t=document.createElement('div'); t.innerHTML=html;
       return (t.textContent||'').replace(/\s+/g,' ').trim();
@@ -1174,9 +1132,8 @@ const EXAM_DATA = {
     }
 
     // --- 재생 상태 ---
-    let token=0;            // 재생 세션 토큰(새 재생 시작하면 이전 무효화)
-    let audioEl=null;       // 현재 OpenAI 오디오
-    const cache=new Map();  // key: voice|text → objectURL (세션 캐시)
+    let token=0;
+    let audioEl=null;
 
     function clearMarks(){
       document.querySelectorAll('details.qa.speaking').forEach(d=>d.classList.remove('speaking'));
@@ -1191,80 +1148,54 @@ const EXAM_DATA = {
       clearMarks();
     }
 
-    // --- OpenAI 음성 받아오기 (캐시 사용) ---
-    async function fetchOpenAITTS(text){
-      const voice=voiceSel.value;
-      const key=voice+'|'+text;
-      if(cache.has(key)) return cache.get(key);
-      let res;
-      try{
-        // Content-Type 헤더를 일부러 생략 → 브라우저의 CORS preflight(OPTIONS)를 피함.
-        // (file:// 로컬 파일에서 'Failed to fetch'가 나는 주된 원인이 preflight 차단이라서)
-        // OpenAI 서버는 본문이 유효한 JSON이면 정상 처리함.
-        res=await fetch('https://api.openai.com/v1/audio/speech',{
-          method:'POST',
-          headers:{'Authorization':'Bearer '+API_KEY},
-          body:JSON.stringify({model:'gpt-4o-mini-tts',voice:voice,input:text,response_format:'mp3'})
-        });
-      }catch(netErr){
-        // 네트워크/CORS 단계 실패
-        throw new Error('서버에 연결하지 못했습니다(네트워크·CORS·확장차단). 시크릿 창에서 열거나 광고차단 확장을 꺼 보세요.');
-      }
-      if(!res.ok){
-        let msg='음성 생성 실패 ('+res.status+')';
-        try{const j=await res.json(); if(j.error&&j.error.message) msg=j.error.message;}catch(e){}
-        if(res.status===401) msg='API 키가 올바르지 않습니다. 키를 다시 확인하세요.';
-        if(res.status===429) msg='요청 한도 또는 크레딧을 초과했습니다(429).';
-        throw new Error(msg);
-      }
-      const blob=await res.blob();
-      const url=URL.createObjectURL(blob);
-      cache.set(key,url);
-      return url;
+    // --- 브라우저 폴백 재생 ---
+    function speakBrowser(details,myToken,resolve){
+      if(!synth){ toast('재생할 음성 파일이 없고, 이 브라우저는 음성 합성도 지원하지 않습니다.'); return resolve('error'); }
+      details.classList.add('speaking');
+      const text=itemText(details);
+      const chunks=text.match(/[^.!?。]+[.!?。]?/g)||[text];
+      let i=0;
+      const vs=synth.getVoices();
+      const kr=vs.find(v=>v.lang&&v.lang.toLowerCase().startsWith('ko'))||null;
+      (function next(){
+        if(myToken!==token){ details.classList.remove('speaking'); return resolve(); }
+        if(i>=chunks.length){ details.classList.remove('speaking'); return resolve('ok'); }
+        const u=new SpeechSynthesisUtterance(chunks[i++].trim());
+        u.lang='ko-KR'; u.rate=rate; if(kr)u.voice=kr;
+        u.onend=next; u.onerror=()=>{ details.classList.remove('speaking'); resolve('error'); };
+        synth.speak(u);
+      })();
     }
 
-    // --- 한 항목 재생 (Promise, 끝나면 resolve) ---
+    // --- 한 항목 재생 (mp3 우선, 없으면 폴백) ---
     function playItem(details,myToken){
-      return new Promise(async (resolve)=>{
+      return new Promise((resolve)=>{
         if(myToken!==token) return resolve();
         if(!details.open) details.open=true;
-        const text=itemText(details);
+        const aid=details.dataset.aid;
         const btn=details.querySelector('.tts-btn');
 
-        // OpenAI 경로
-        if(API_KEY.trim()){
-          details.classList.add('loading'); if(btn) btn.classList.add('spin');
-          let url;
-          try{ url=await fetchOpenAITTS(text); }
-          catch(err){
-            details.classList.remove('loading'); if(btn) btn.classList.remove('spin');
-            toast('⚠️ '+err.message); return resolve('error');
-          }
-          if(myToken!==token){ details.classList.remove('loading'); if(btn) btn.classList.remove('spin'); return resolve(); }
+        // 이미 없는 걸로 확인된 항목은 바로 폴백
+        if(!aid || missing.has(aid)){ return speakBrowser(details,myToken,resolve); }
+
+        details.classList.add('loading'); if(btn) btn.classList.add('spin');
+        const a=new Audio(AUDIO_DIR+encodeURIComponent(aid)+'.mp3');
+        a.playbackRate=rate;
+        a.oncanplaythrough=()=>{
+          if(myToken!==token){ details.classList.remove('loading'); if(btn) btn.classList.remove('spin'); return; }
           details.classList.remove('loading'); if(btn) btn.classList.remove('spin');
           details.classList.add('speaking');
-          const a=new Audio(url); audioEl=a; a.playbackRate=rate;
-          a.onended=()=>{ details.classList.remove('speaking'); resolve('ok'); };
-          a.onerror=()=>{ details.classList.remove('speaking'); resolve('error'); };
+          audioEl=a;
           a.play().catch(()=>{ details.classList.remove('speaking'); resolve('error'); });
-          return;
-        }
-
-        // 브라우저 폴백
-        if(!synth){ toast('이 브라우저는 음성을 지원하지 않습니다.'); return resolve('error'); }
-        details.classList.add('speaking');
-        const chunks=text.match(/[^.!?。]+[.!?。]?/g)||[text];
-        let i=0;
-        const vs=synth.getVoices();
-        const kr=vs.find(v=>v.lang&&v.lang.toLowerCase().startsWith('ko'))||null;
-        (function next(){
-          if(myToken!==token){ details.classList.remove('speaking'); return resolve(); }
-          if(i>=chunks.length){ details.classList.remove('speaking'); return resolve('ok'); }
-          const u=new SpeechSynthesisUtterance(chunks[i++].trim());
-          u.lang='ko-KR'; u.rate=rate; if(kr)u.voice=kr;
-          u.onend=next; u.onerror=()=>{ details.classList.remove('speaking'); resolve('error'); };
-          synth.speak(u);
-        })();
+        };
+        a.onended=()=>{ details.classList.remove('speaking'); if(audioEl===a)audioEl=null; resolve('ok'); };
+        a.onerror=()=>{
+          // mp3 없음/로드 실패 → 폴백
+          missing.add(aid);
+          details.classList.remove('loading'); if(btn) btn.classList.remove('spin');
+          speakBrowser(details,myToken,resolve);
+        };
+        a.load();
       });
     }
 
@@ -1286,7 +1217,7 @@ const EXAM_DATA = {
       e.preventDefault();
       const wasPlaying=cbtn.classList.contains('playing');
       stopAll();
-      if(wasPlaying) return; // 토글 정지
+      if(wasPlaying) return;
       const chapId=cbtn.dataset.chapter;
       const sec=document.getElementById(chapId);
       const items=[...sec.querySelectorAll('details.qa')].filter(d=>!d.classList.contains('hidden'));
@@ -1298,8 +1229,7 @@ const EXAM_DATA = {
         d.scrollIntoView({behavior:'smooth',block:'center'});
         const r=await playItem(d,my);
         if(my!==token) break;
-        if(r==='error'){ break; } // 오류 시 연속재생 중단
-        await new Promise(res=>setTimeout(res,250)); // 항목 간 간격
+        await new Promise(res=>setTimeout(res,220)); // 항목 간 간격
       }
       if(my===token) cbtn.classList.remove('playing');
     });
